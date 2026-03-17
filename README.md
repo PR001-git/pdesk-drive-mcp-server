@@ -1,2 +1,18 @@
 # pdesk-drive-mcp-server
-MCP server for managing and integrating own Google Drive operations, enabling scalable file handling, automation, and service orchestration.
+
+MCP server responsible for handling Google Drive operations.
+
+## Features
+- File management and orchestration
+- Integration with external services
+- Scalable and modular architecture
+
+## Tech Stack
+- .NET / Node (adjust accordingly)
+- REST / MCP Protocol
+
+## Getting Started
+
+```bash
+# install dependencies
+# run the project
