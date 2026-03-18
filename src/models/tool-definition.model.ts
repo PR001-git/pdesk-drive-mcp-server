@@ -1,10 +1,9 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { ZodRawShape } from 'zod';
+import type { output, ZodObject, ZodRawShape } from 'zod';
 
-export interface ToolDefinition {
+export interface ToolDefinition<T extends ZodRawShape = ZodRawShape> {
   name: string;
   description: string;
-  // .shape is extracted at registration time by the tool registry
-  inputSchema: { shape: ZodRawShape };
-  handler: (input: unknown) => Promise<CallToolResult>;
+  inputSchema: ZodObject<T>;
+  handler: (args: output<ZodObject<T>>) => Promise<CallToolResult>;
 }

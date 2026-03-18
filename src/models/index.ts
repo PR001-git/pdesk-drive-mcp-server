@@ -1,6 +1,10 @@
 export type { DriveFile } from './drive-file.model.js';
 export type { DriveFolder } from './drive-folder.model.js';
-export type { UploadParams } from './upload-params.model.js';
 export type { ListFilesParams } from './list-params.model.js';
+export type { ListRecordingsParams } from './list-recordings-params.model.js';
 export type { SearchParams } from './search-params.model.js';
 export type { ToolDefinition } from './tool-definition.model.js';
+export type { TranscribeParams } from './transcribe-params.model.js';
+export type { Transcript } from './transcript.model.js';
+export type { Transcription } from './transcription.model.js';
+export type { UploadParams } from './upload-params.model.js';

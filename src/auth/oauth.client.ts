@@ -1,6 +1,10 @@
 import { OAuth2Client } from 'google-auth-library';
 
-const SCOPES = ['https://www.googleapis.com/auth/drive'];
+const SCOPES = [
+  'https://www.googleapis.com/auth/drive',
+  // Required for Google Cloud Speech-to-Text and GCS (large-file transcription)
+  'https://www.googleapis.com/auth/cloud-platform',
+];
 
 export function createOAuth2Client(): OAuth2Client {
   const clientId = process.env['GOOGLE_CLIENT_ID'];

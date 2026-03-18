@@ -9,6 +9,8 @@ import { createDriveClient } from './drive/drive.client.js';
 import { DriveRepository } from './drive/drive.repository.js';
 import { DriveAuthError } from './errors/drive-auth.error.js';
 import { DriveService } from './services/drive.service.js';
+import { createSpeechClient } from './speech/speech.client.js';
+import { SpeechRepository } from './speech/speech.repository.js';
 import { registerAllTools } from './tools/tool-registry.js';
 
 async function waitForOAuthCode(): Promise<string> {
@@ -70,8 +72,10 @@ async function main(): Promise<void> {
   });
 
   const driveClient = createDriveClient(oauth2Client);
+  const speechClient = createSpeechClient(oauth2Client);
   const repository = new DriveRepository(driveClient);
-  const service = new DriveService(repository);
+  const speechRepository = new SpeechRepository(speechClient, oauth2Client);
+  const service = new DriveService(repository, speechRepository);
 
   const server = new McpServer({ name: 'drive-mcp-server', version: '1.0.0' });
   registerAllTools(server, service);
