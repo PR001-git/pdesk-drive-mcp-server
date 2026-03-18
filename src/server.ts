@@ -8,10 +8,15 @@ import { TokenStore } from './auth/token.store.js';
 import { createDriveClient } from './drive/drive.client.js';
 import { DriveRepository } from './drive/drive.repository.js';
 import { DriveAuthError } from './errors/drive-auth.error.js';
+import { createGithubClient } from './github/github.client.js';
+import { GithubRepository } from './github/github.repository.js';
+import { createNpmClient } from './npm/npm.client.js';
+import { NpmRepository } from './npm/npm.repository.js';
+import { DocsService } from './services/docs.service.js';
 import { DriveService } from './services/drive.service.js';
 import { createSpeechClient } from './speech/speech.client.js';
 import { SpeechRepository } from './speech/speech.repository.js';
-import { registerAllTools } from './tools/tool-registry.js';
+import { registerAllTools } from './tools/registry/tool-registry.js';
 
 async function waitForOAuthCode(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -75,10 +80,14 @@ async function main(): Promise<void> {
   const speechClient = createSpeechClient(oauth2Client);
   const repository = new DriveRepository(driveClient);
   const speechRepository = new SpeechRepository(speechClient, oauth2Client);
-  const service = new DriveService(repository, speechRepository);
+  const driveService = new DriveService(repository, speechRepository);
+
+  const npmRepository = new NpmRepository(createNpmClient());
+  const githubRepository = new GithubRepository(createGithubClient());
+  const docsService = new DocsService(npmRepository, githubRepository);
 
   const server = new McpServer({ name: 'drive-mcp-server', version: '1.0.0' });
-  registerAllTools(server, service);
+  registerAllTools(server, driveService, docsService);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

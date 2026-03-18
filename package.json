@@ -9,7 +9,7 @@
     "start": "node --env-file=.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test:client": "node --env-file=.env test-client.mjs",
-    "inspect": "npx @modelcontextprotocol/inspector node --env-file=.env dist/server.js"
+    "inspect": "tsc && npx @modelcontextprotocol/inspector node --env-file=.env dist/server.js"
   },
   "keywords": [],
   "author": "",

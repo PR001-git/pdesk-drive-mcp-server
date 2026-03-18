@@ -1,4 +1,9 @@
+export type { IDocsService } from './docs-service.interface.js';
 export type { IDriveRepository } from './drive-repository.interface.js';
 export type { IDriveService } from './drive-service.interface.js';
+export type { IGithubHttpClient } from './github-http-client.interface.js';
+export type { IGithubRepository } from './github-repository.interface.js';
+export type { INpmHttpClient } from './npm-http-client.interface.js';
+export type { INpmRepository } from './npm-repository.interface.js';
 export type { ISpeechRepository } from './speech-repository.interface.js';
 export type { ITokenStore } from './token-store.interface.js';

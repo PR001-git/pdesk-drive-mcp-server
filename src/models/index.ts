@@ -1,4 +1,6 @@
 export type { DriveFile } from './drive-file.model.js';
+export type { PackageDocs } from './package-docs.model.js';
+export type { PackageInfo } from './package-info.model.js';
 export type { DriveFolder } from './drive-folder.model.js';
 export type { ListFilesParams } from './list-params.model.js';
 export type { ListRecordingsParams } from './list-recordings-params.model.js';

@@ -1,5 +1,7 @@
 export { DeleteFileInputSchema } from './delete-file.schema.js';
 export type { DeleteFileInput } from './delete-file.schema.js';
+export { GetPackageDocsInputSchema } from './get-package-docs.schema.js';
+export type { GetPackageDocsInput } from './get-package-docs.schema.js';
 export { TranscribeRecordingInputSchema } from './transcribe-recording.schema.js';
 export type { TranscribeRecordingInput } from './transcribe-recording.schema.js';
 export { GetTranscriptInputSchema } from './get-transcript.schema.js';
