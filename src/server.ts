@@ -5,6 +5,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { buildAuthUrl, createOAuth2Client } from './auth/oauth.client.js';
 import { TokenStore } from './auth/token.store.js';
+import { AudioPreparationService } from './audio/audio-preparation.service.js';
+import { resolveFfmpegPaths } from './audio/ffmpeg-resolver.js';
 import { createDriveClient } from './drive/drive.client.js';
 import { DriveRepository } from './drive/drive.repository.js';
 import { DriveAuthError } from './errors/drive-auth.error.js';
@@ -80,14 +82,16 @@ async function main(): Promise<void> {
   const speechClient = createSpeechClient(oauth2Client);
   const repository = new DriveRepository(driveClient);
   const speechRepository = new SpeechRepository(speechClient, oauth2Client);
-  const driveService = new DriveService(repository, speechRepository);
+  const ffmpegPaths = await resolveFfmpegPaths();
+  const audioPrep = new AudioPreparationService(ffmpegPaths);
+  const driveService = new DriveService(repository, speechRepository, audioPrep);
 
   const npmRepository = new NpmRepository(createNpmClient());
   const githubRepository = new GithubRepository(createGithubClient());
   const docsService = new DocsService(npmRepository, githubRepository);
 
   const server = new McpServer({ name: 'drive-mcp-server', version: '1.0.0' });
-  registerAllTools(server, driveService, docsService);
+  registerAllTools(server, driveService, docsService, audioPrep);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

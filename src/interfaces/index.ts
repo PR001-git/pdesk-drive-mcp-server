@@ -1,3 +1,4 @@
+export type { IAudioPreparationService } from './audio-preparation-service.interface.js';
 export type { IDocsService } from './docs-service.interface.js';
 export type { IDriveRepository } from './drive-repository.interface.js';
 export type { IDriveService } from './drive-service.interface.js';

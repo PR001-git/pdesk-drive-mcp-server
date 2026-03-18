@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\\\'' -Filter ''ffmpeg.exe'' -Recurse -ErrorAction SilentlyContinue -Depth 5 | Select-Object -ExpandProperty FullName\")",
+      "Bash(npx tsc:*)"
     ]
   }
 }

@@ -1,6 +1,9 @@
+export { AudioConversionError } from './audio-conversion.error.js';
 export { DriveAuthError } from './drive-auth.error.js';
+export { FfmpegNotInstalledError } from './ffmpeg-not-installed.error.js';
 export { FileNotFoundError } from './file-not-found.error.js';
 export { HttpError } from './http.error.js';
+export { NoAudioStreamError } from './no-audio-stream.error.js';
 export { NoGithubRepoError } from './no-github-repo.error.js';
 export { PackageNotFoundError } from './package-not-found.error.js';
 export { ReadmeNotFoundError } from './readme-not-found.error.js';

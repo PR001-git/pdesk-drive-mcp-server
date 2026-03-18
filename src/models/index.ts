@@ -1,3 +1,4 @@
+export type { AudioPreparationResult } from './audio-preparation-result.model.js';
 export type { DriveFile } from './drive-file.model.js';
 export type { PackageDocs } from './package-docs.model.js';
 export type { PackageInfo } from './package-info.model.js';

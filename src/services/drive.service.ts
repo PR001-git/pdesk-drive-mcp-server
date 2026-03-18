@@ -1,3 +1,9 @@
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type { IAudioPreparationService } from '../interfaces/audio-preparation-service.interface.js';
 import type { IDriveRepository } from '../interfaces/drive-repository.interface.js';
 import type { IDriveService } from '../interfaces/drive-service.interface.js';
 import type { ISpeechRepository } from '../interfaces/speech-repository.interface.js';
@@ -12,7 +18,8 @@ import type { UploadParams } from '../models/upload-params.model.js';
 export class DriveService implements IDriveService {
   constructor(
     private readonly repo: IDriveRepository,
-    private readonly speechRepo: ISpeechRepository
+    private readonly speechRepo: ISpeechRepository,
+    private readonly audioPrep: IAudioPreparationService
   ) {}
 
   async listFiles(params: ListFilesParams): Promise<DriveFile[]> {
@@ -45,8 +52,23 @@ export class DriveService implements IDriveService {
       this.repo.getFileContent(fileId),
       this.repo.getFileMimeType(fileId),
     ]);
-    const text = await this.speechRepo.transcribe({ audio, mimeType, languageCode });
-    return { fileId, text };
+
+    const prepared = await this.prepareAudioBuffer(audio, mimeType);
+
+    try {
+      const text = await this.speechRepo.transcribe({
+        audio: prepared.audio,
+        mimeType: prepared.mimeType,
+        languageCode,
+      });
+      return { fileId, text };
+    } finally {
+      // Clean up the converted temp file; the input temp file is already
+      // removed inside prepareAudioBuffer.
+      if (prepared.tempPath !== undefined) {
+        await rm(prepared.tempPath, { force: true });
+      }
+    }
   }
 
   async uploadFile(params: UploadParams): Promise<DriveFile> {
@@ -59,5 +81,43 @@ export class DriveService implements IDriveService {
 
   async deleteFile(fileId: string): Promise<void> {
     return this.repo.deleteFile(fileId);
+  }
+
+  // ─── Private ───────────────────────────────────────────────────────────────
+
+  /**
+   * Bridges the Buffer-based Drive layer with the file-path-based
+   * AudioPreparationService. When the MIME type is already supported the
+   * buffer is returned as-is with no file I/O. Otherwise it is written to a
+   * temp file, converted, and read back — both temp files are cleaned up
+   * before this method returns.
+   */
+  private async prepareAudioBuffer(
+    audio: Buffer,
+    mimeType: string
+  ): Promise<{ audio: Buffer; mimeType: string; tempPath?: string }> {
+    if (this.audioPrep.isSupported(mimeType)) {
+      return { audio, mimeType };
+    }
+
+    const inputPath = join(tmpdir(), `drive-audio-in-${randomUUID()}`);
+    await writeFile(inputPath, audio);
+
+    try {
+      const result = await this.audioPrep.prepare(inputPath, mimeType);
+      const preparedAudio = await readFile(result.filePath);
+
+      // result.filePath is a new temp file when wasConverted is true.
+      // We hand tempPath back up to transcribeRecording for cleanup after
+      // the Speech API call completes.
+      return {
+        audio: preparedAudio,
+        mimeType: result.mimeType,
+        ...(result.wasConverted ? { tempPath: result.filePath } : {}),
+      };
+    } finally {
+      // The input temp file is no longer needed regardless of outcome.
+      await rm(inputPath, { force: true });
+    }
   }
 }

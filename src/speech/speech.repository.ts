@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream';
+
 import { google } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import type { speech_v1 } from 'googleapis';
@@ -112,7 +114,7 @@ export class SpeechRepository implements ISpeechRepository {
     await storage.objects.insert({
       bucket,
       name: objectName,
-      media: { body: audio },
+      media: { body: Readable.from(audio) },
       requestBody: { name: objectName },
     });
 
