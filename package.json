@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --env-file=.env --loader ts-node/esm src/server.ts",
     "build": "tsc",
-    "start": "node --env-file=.env dist/server.js",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test:client": "node --env-file=.env test-client.mjs",
     "inspect": "tsc && npx @modelcontextprotocol/inspector node --env-file=.env dist/server.js"
