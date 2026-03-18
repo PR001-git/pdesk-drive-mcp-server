@@ -1,0 +1,29 @@
+{
+  "name": "drive-mcp-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "node --env-file=.env --loader ts-node/esm src/server.ts",
+    "build": "tsc",
+    "start": "node --env-file=.env dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "test:client": "node --env-file=.env test-client.mjs",
+    "inspect": "npx @modelcontextprotocol/inspector node --env-file=.env dist/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",   
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "google-auth-library": "^10.6.1",
+    "googleapis": "^171.4.0",
+    "zod": "^4.3.6"
+  }
+}
