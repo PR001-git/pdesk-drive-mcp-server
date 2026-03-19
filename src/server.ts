@@ -16,8 +16,8 @@ import { createNpmClient } from './npm/npm.client.js';
 import { NpmRepository } from './npm/npm.repository.js';
 import { DocsService } from './services/docs.service.js';
 import { DriveService } from './services/drive.service.js';
-import { createSpeechClient } from './speech/speech.client.js';
-import { SpeechRepository } from './speech/speech.repository.js';
+import { WhisperRepository } from './speech/speech.repository.js';
+import { resolveWhisperPath } from './speech/whisper.resolver.js';
 import { registerAllTools } from './tools/registry/tool-registry.js';
 
 async function waitForOAuthCode(): Promise<string> {
@@ -79,9 +79,9 @@ async function main(): Promise<void> {
   });
 
   const driveClient = createDriveClient(oauth2Client);
-  const speechClient = createSpeechClient(oauth2Client);
   const repository = new DriveRepository(driveClient);
-  const speechRepository = new SpeechRepository(speechClient, oauth2Client);
+  const whisperPath = await resolveWhisperPath();
+  const speechRepository = new WhisperRepository(whisperPath);
   const ffmpegPaths = await resolveFfmpegPaths();
   const audioPrep = new AudioPreparationService(ffmpegPaths);
   const driveService = new DriveService(repository, speechRepository, audioPrep);

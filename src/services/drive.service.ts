@@ -7,15 +7,19 @@ import type { IAudioPreparationService } from '../interfaces/audio-preparation-s
 import type { IDriveRepository } from '../interfaces/drive-repository.interface.js';
 import type { IDriveService } from '../interfaces/drive-service.interface.js';
 import type { ISpeechRepository } from '../interfaces/speech-repository.interface.js';
+import { Logger } from '../logger/index.js';
 import type { DriveFile } from '../models/drive-file.model.js';
 import type { ListFilesParams } from '../models/list-params.model.js';
 import type { ListRecordingsParams } from '../models/list-recordings-params.model.js';
 import type { SearchParams } from '../models/search-params.model.js';
 import type { Transcript } from '../models/transcript.model.js';
+import type { ProgressCallback, TranscribeParams } from '../models/transcribe-params.model.js';
 import type { Transcription } from '../models/transcription.model.js';
 import type { UploadParams } from '../models/upload-params.model.js';
 
 export class DriveService implements IDriveService {
+  private readonly logger = new Logger('DriveService');
+
   constructor(
     private readonly repo: IDriveRepository,
     private readonly speechRepo: ISpeechRepository,
@@ -47,20 +51,35 @@ export class DriveService implements IDriveService {
     return { transcriptFileId: transcriptFile.id, content: buffer.toString('utf-8') };
   }
 
-  async transcribeRecording(fileId: string, languageCode: string): Promise<Transcription> {
+  async transcribeRecording(fileId: string, languageCode: string, onProgress?: ProgressCallback): Promise<Transcription> {
+    onProgress?.(0, 100, 'Downloading audio from Google Drive…');
+    this.logger.log(`Downloading audio — fileId=${fileId}`);
     const [audio, mimeType] = await Promise.all([
       this.repo.getFileContent(fileId),
       this.repo.getFileMimeType(fileId),
     ]);
+    this.logger.log(`Downloaded ${audio.byteLength} bytes — mimeType=${mimeType}`);
 
+    onProgress?.(10, 100, 'Preparing audio for transcription…');
+    this.logger.log(`Preparing audio buffer`);
     const prepared = await this.prepareAudioBuffer(audio, mimeType);
+    this.logger.log(`Audio ready — ${prepared.audio.byteLength} bytes mimeType=${prepared.mimeType} converted=${prepared.tempPath !== undefined}`);
 
     try {
-      const text = await this.speechRepo.transcribe({
+      onProgress?.(25, 100, 'Sending audio to Speech-to-Text…');
+      this.logger.log(`Sending to speech repository`);
+      const transcribeParams: TranscribeParams = {
         audio: prepared.audio,
         mimeType: prepared.mimeType,
         languageCode,
-      });
+      };
+
+      if (onProgress !== undefined) {
+        transcribeParams.onProgress = onProgress;
+      }
+
+      const text = await this.speechRepo.transcribe(transcribeParams);
+      this.logger.log(`Transcription complete — ${text.length} chars`);
       return { fileId, text };
     } finally {
       // Clean up the converted temp file; the input temp file is already

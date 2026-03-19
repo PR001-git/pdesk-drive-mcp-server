@@ -5,6 +5,7 @@ import type { SearchParams } from '../models/search-params.model.js';
 import type { Transcript } from '../models/transcript.model.js';
 import type { UploadParams } from '../models/upload-params.model.js';
 
+import type { ProgressCallback } from '../models/transcribe-params.model.js';
 import type { Transcription } from '../models/transcription.model.js';
 
 export interface IDriveService {
@@ -12,7 +13,7 @@ export interface IDriveService {
   listRecordings(params: ListRecordingsParams): Promise<DriveFile[]>;
   readFile(fileId: string): Promise<{ content: string; encoding: 'utf-8' | 'base64' }>;
   getTranscript(recordingFileId: string): Promise<Transcript>;
-  transcribeRecording(fileId: string, languageCode: string): Promise<Transcription>;
+  transcribeRecording(fileId: string, languageCode: string, onProgress?: ProgressCallback): Promise<Transcription>;
   uploadFile(params: UploadParams): Promise<DriveFile>;
   searchFiles(params: SearchParams): Promise<DriveFile[]>;
   deleteFile(fileId: string): Promise<void>;

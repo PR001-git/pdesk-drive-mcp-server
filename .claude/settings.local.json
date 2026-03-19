@@ -4,7 +4,9 @@
       "Bash(npm run:*)",
       "Bash(npm install:*)",
       "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\\\'' -Filter ''ffmpeg.exe'' -Recurse -ErrorAction SilentlyContinue -Depth 5 | Select-Object -ExpandProperty FullName\")",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(grep -n \"handler:\" src/tools/*.tool.ts)",
+      "Bash(pip3 show:*)"
     ]
   }
 }

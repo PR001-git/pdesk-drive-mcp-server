@@ -1,178 +1,195 @@
-import { Readable } from 'node:stream';
-
-import { google } from 'googleapis';
-import type { OAuth2Client } from 'google-auth-library';
-import type { speech_v1 } from 'googleapis';
+import { execFile } from 'node:child_process';
+import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
 
 import type { ISpeechRepository } from '../interfaces/speech-repository.interface.js';
-import type { TranscribeParams } from '../models/transcribe-params.model.js';
+import type { ProgressCallback, TranscribeParams } from '../models/transcribe-params.model.js';
 import { TranscriptionFailedError } from '../errors/transcription-failed.error.js';
+import { Logger } from '../logger/index.js';
 
-// Maximum inline audio size for the Speech-to-Text API (10 MB)
-const MAX_INLINE_BYTES = 10 * 1024 * 1024;
+// 30 minutes — protects against corrupt audio that hangs Whisper
+const PROCESS_TIMEOUT_MS = 30 * 60_000;
 
-// Poll interval and timeout for long-running operations (ms)
-const POLL_INTERVAL_MS = 5_000;
-const POLL_TIMEOUT_MS = 10 * 60_000;
+// Progress reporting interval while Whisper is running
+const PROGRESS_INTERVAL_MS = 5_000;
 
-// Maps audio MIME types to Speech-to-Text encoding enum values.
-// Video containers (mp4, mkv) are not supported — audio must be extracted first.
-const MIME_TO_ENCODING: Record<string, string> = {
-  'audio/wav': 'LINEAR16',
-  'audio/x-wav': 'LINEAR16',
-  'audio/flac': 'FLAC',
-  'audio/x-flac': 'FLAC',
-  'audio/mpeg': 'MP3',
-  'audio/mp3': 'MP3',
-  'audio/ogg': 'OGG_OPUS',
-  'audio/webm': 'WEBM_OPUS',
+// Maps MIME types to file extensions so Whisper can identify the format.
+// Whisper auto-detects codec from the file, but needs a sensible extension.
+const MIME_TO_EXT: Record<string, string> = {
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/flac': '.flac',
+  'audio/x-flac': '.flac',
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/ogg': '.ogg',
+  'audio/webm': '.webm',
+  'audio/mp4': '.m4a',
+  'audio/x-m4a': '.m4a',
 };
 
-function resolveEncoding(mimeType: string): string {
-  const encoding = MIME_TO_ENCODING[mimeType];
-
-  if (encoding === undefined) {
-    throw new TranscriptionFailedError(
-      `Unsupported audio format: "${mimeType}". ` +
-        'Supported formats: WAV, FLAC, MP3, OGG Opus, WebM Opus. ' +
-        'For MP4/MKV recordings, extract the audio track first: ' +
-        'ffmpeg -i recording.mp4 -vn -acodec libmp3lame recording.mp3'
-    );
-  }
-
-  return encoding;
+/**
+ * Extracts the base language code from a BCP-47 locale tag.
+ * Whisper expects ISO 639-1 codes (e.g. "en"), not full locale tags
+ * like "en-US" that the Google Speech API accepted.
+ */
+function toWhisperLanguage(languageCode: string): string {
+  return languageCode.split('-')[0]!.toLowerCase();
 }
 
-function extractTranscript(response: speech_v1.Schema$SpeechRecognitionResult[]): string {
-  return response
-    .flatMap((r) => r.alternatives ?? [])
-    .map((a) => a.transcript ?? '')
-    .join(' ')
-    .trim();
+function fileExtensionForMime(mimeType: string): string {
+  return MIME_TO_EXT[mimeType] ?? '.audio';
 }
 
-export class SpeechRepository implements ISpeechRepository {
-  constructor(
-    private readonly client: speech_v1.Speech,
-    private readonly auth: OAuth2Client
-  ) {}
+export class WhisperRepository implements ISpeechRepository {
+  private readonly logger = new Logger('WhisperRepository');
+
+  constructor(private readonly whisperPath: string) {}
 
   async transcribe(params: TranscribeParams): Promise<string> {
-    const encoding = resolveEncoding(params.mimeType);
-    const config: speech_v1.Schema$RecognitionConfig = {
-      encoding,
-      languageCode: params.languageCode,
-      enableAutomaticPunctuation: true,
-    };
+    const ext = fileExtensionForMime(params.mimeType);
+    const sizeMb = (params.audio.byteLength / (1024 * 1024)).toFixed(2);
+    this.logger.log(`transcribe — ${sizeMb} MB ext=${ext} lang=${params.languageCode}`);
 
-    if (params.audio.byteLength <= MAX_INLINE_BYTES) {
-      return this.transcribeInline(params.audio, config);
-    }
+    const sessionId = randomUUID();
+    const inputPath = join(tmpdir(), `whisper-in-${sessionId}${ext}`);
+    const outputDir = join(tmpdir(), `whisper-out-${sessionId}`);
 
-    return this.transcribeViaGcs(params.audio, config);
-  }
-
-  private async transcribeInline(
-    audio: Buffer,
-    config: speech_v1.Schema$RecognitionConfig
-  ): Promise<string> {
-    const res = await this.client.speech.recognize({
-      requestBody: {
-        config,
-        audio: { content: audio.toString('base64') },
-      },
-    });
-
-    const results = res.data.results ?? [];
-    const text = extractTranscript(results);
-
-    if (text.length === 0) {
-      throw new TranscriptionFailedError('No speech detected in the audio.');
-    }
-
-    return text;
-  }
-
-  private async transcribeViaGcs(
-    audio: Buffer,
-    config: speech_v1.Schema$RecognitionConfig
-  ): Promise<string> {
-    const bucket = process.env['GOOGLE_CLOUD_BUCKET'];
-
-    if (bucket === undefined || bucket === '') {
-      throw new TranscriptionFailedError(
-        'Audio file exceeds the 10 MB inline limit. ' +
-          'Set the GOOGLE_CLOUD_BUCKET environment variable to enable large-file transcription via GCS.'
-      );
-    }
-
-    const objectName = `transcription-tmp/${Date.now()}-${Math.random().toString(36).slice(2)}.audio`;
-    const gcsUri = `gs://${bucket}/${objectName}`;
-    const storage = google.storage({ version: 'v1', auth: this.auth });
-
-    // Upload to GCS
-    await storage.objects.insert({
-      bucket,
-      name: objectName,
-      media: { body: Readable.from(audio) },
-      requestBody: { name: objectName },
-    });
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(inputPath, params.audio);
 
     try {
-      const operationRes = await this.client.speech.longrunningrecognize({
-        requestBody: {
-          config,
-          audio: { uri: gcsUri },
-        },
-      });
+      const text = await this.runWhisper(
+        inputPath,
+        outputDir,
+        params.languageCode,
+        params.onProgress
+      );
 
-      const operationName = operationRes.data.name;
-      if (operationName === undefined || operationName === null) {
-        throw new TranscriptionFailedError('Speech-to-Text operation returned no name.');
-      }
-
-      const results = await this.pollOperation(operationName);
-      const text = extractTranscript(results);
-
-      if (text.length === 0) {
+      if (text.trim().length === 0) {
         throw new TranscriptionFailedError('No speech detected in the audio.');
       }
 
-      return text;
+      return text.trim();
     } finally {
-      // Always clean up the temporary GCS object
-      await storage.objects.delete({ bucket, object: objectName }).catch(() => undefined);
+      await rm(inputPath, { force: true });
+      await rm(outputDir, { recursive: true, force: true });
     }
   }
 
-  private async pollOperation(
-    operationName: string
-  ): Promise<speech_v1.Schema$SpeechRecognitionResult[]> {
-    const deadline = Date.now() + POLL_TIMEOUT_MS;
+  private async runWhisper(
+    inputPath: string,
+    outputDir: string,
+    languageCode: string,
+    onProgress?: ProgressCallback
+  ): Promise<string> {
+    const language = toWhisperLanguage(languageCode);
+    const args = [
+      inputPath,
+      '--language', language,
+      '--output_format', 'txt',
+      '--output_dir', outputDir,
+      '--model', 'tiny',
+      '--device','cpu'
+    ];
 
-    while (Date.now() < deadline) {
-      await sleep(POLL_INTERVAL_MS);
+    this.logger.log(`Running: ${this.whisperPath} ${args.join(' ')}`);
 
-      const res = await this.client.operations.get({ name: operationName });
+    const text = await this.execWithProgress(
+      this.whisperPath,
+      args,
+      onProgress
+    );
 
-      if (res.data.done === true) {
-        const error = res.data.error;
-        if (error !== null && error !== undefined) {
-          throw new TranscriptionFailedError(error.message ?? 'Unknown Speech-to-Text error.');
+    // If execWithProgress returns early (shouldn't happen), fall back to
+    // reading the output file.
+    if (text !== undefined) {
+      return text;
+    }
+
+    return this.readOutputFile(inputPath, outputDir);
+  }
+
+  /**
+   * Runs Whisper as a subprocess with time-based progress reporting.
+   *
+   * Whisper CLI does not emit structured progress, so we report estimated
+   * milestones on a timer. This keeps the MCP client's timeout from
+   * expiring during long transcriptions.
+   */
+  private execWithProgress(
+    binary: string,
+    args: string[],
+    onProgress?: ProgressCallback
+  ): Promise<string | undefined> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        binary,
+        args,
+        { timeout: PROCESS_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024 },
+        (err, _stdout, stderr) => {
+          clearInterval(progressTimer);
+
+          if (err !== null) {
+            const msg = err.message.toLowerCase();
+
+            if (msg.includes('enoent') || msg.includes('spawn')) {
+              reject(new TranscriptionFailedError(
+                'Whisper binary not found. Ensure openai-whisper is installed: pip install openai-whisper'
+              ));
+              return;
+            }
+
+            if (msg.includes('killed') || msg.includes('timeout')) {
+              reject(new TranscriptionFailedError(
+                'Transcription timed out after 30 minutes. The audio file may be corrupt or extremely long.'
+              ));
+              return;
+            }
+
+            reject(new TranscriptionFailedError(
+              `Whisper process failed: ${stderr || err.message}`
+            ));
+            return;
+          }
+
+          // Process completed — the output file holds the transcript
+          resolve(undefined);
         }
+      );
 
-        const response = res.data.response as
-          | { results?: speech_v1.Schema$SpeechRecognitionResult[] }
-          | undefined;
+      // Time-based progress: report milestones every PROGRESS_INTERVAL_MS
+      let elapsed = 0;
+      const progressTimer = setInterval(() => {
+        elapsed += PROGRESS_INTERVAL_MS;
+        const elapsedSec = Math.round(elapsed / 1000);
 
-        return response?.results ?? [];
-      }
-    }
+        // Report on a 0-100 scale; cap at 95 so "100" only comes on completion
+        const estimatedProgress = Math.min(95, Math.round(elapsed / 1000));
+        onProgress?.(estimatedProgress, 100, `Transcribing audio… ${elapsedSec}s elapsed`);
+      }, PROGRESS_INTERVAL_MS);
 
-    throw new TranscriptionFailedError('Transcription timed out after 10 minutes.');
+      // Ensure timer is cleaned up if the child process is killed externally
+      child.on('close', () => clearInterval(progressTimer));
+    });
   }
-}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  private async readOutputFile(inputPath: string, outputDir: string): Promise<string> {
+    // Whisper names the output file after the input: input.mp3 → input.txt
+    const inputBase = basename(inputPath);
+    const dotIndex = inputBase.lastIndexOf('.');
+    const stem = dotIndex > 0 ? inputBase.slice(0, dotIndex) : inputBase;
+    const outputPath = join(outputDir, `${stem}.txt`);
+
+    try {
+      return await readFile(outputPath, 'utf-8');
+    } catch {
+      throw new TranscriptionFailedError(
+        'Whisper completed but no output file was produced. ' +
+        'The audio may contain no recognisable speech.'
+      );
+    }
+  }
 }
