@@ -1,153 +1,85 @@
 import { execFile } from 'node:child_process';
-import { access, readdir } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join } from 'node:path';
-import { env, platform } from 'node:process';
+import { join, dirname } from 'node:path';
+import { env } from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { WhisperNotInstalledError } from '../errors/whisper-not-installed.error.js';
 
 const execFileAsync = promisify(execFile);
 
+export interface PythonPaths {
+  pythonPath: string;
+  runnerPath: string;
+}
+
 /**
- * Resolves the path to the Whisper CLI binary.
+ * Resolves the Python interpreter and verifies that faster-whisper is importable.
  *
- * Resolution order:
- *   1. WHISPER_PATH environment variable (explicit override)
- *   2. Bare "whisper" — works when already on PATH
- *   3. Known Python Scripts directories (Windows)
+ * Resolution order for the interpreter:
+ *   1. PYTHON_PATH environment variable (explicit override)
+ *   2. "python" on PATH
+ *   3. "python3" on PATH
+ *   4. "py" on PATH (Windows launcher)
  *
  * Called once at startup so the server fails fast with a clear error
- * if Whisper is not installed, rather than failing on the first
- * transcription request.
+ * if faster-whisper is not installed.
  */
-export async function resolveWhisperPath(): Promise<string> {
-  const envPath = env['WHISPER_PATH'];
+export async function resolvePythonPath(): Promise<PythonPaths> {
+  const runnerPath = resolveRunnerPath();
 
+  const envPath = env['PYTHON_PATH'];
   if (envPath !== undefined && envPath !== '') {
-    await assertWhisperWorks(envPath);
-    return envPath;
+    await assertFasterWhisperImportable(envPath);
+    return { pythonPath: envPath, runnerPath };
   }
 
-  if (await canRun('whisper')) {
-    return 'whisper';
+  const candidates = ['python', 'python3', 'py'];
+
+  for (const candidate of candidates) {
+    if (await canRunPython(candidate)) {
+      await assertFasterWhisperImportable(candidate);
+      return { pythonPath: candidate, runnerPath };
+    }
   }
 
-  const discovered = await discoverFromPythonScripts();
-  if (discovered !== undefined) {
-    return discovered;
-  }
-
-  throw new WhisperNotInstalledError();
+  throw new WhisperNotInstalledError(
+    'No Python interpreter found on PATH. Install Python and run: pip install faster-whisper'
+  );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function canRun(binary: string): Promise<boolean> {
+function resolveRunnerPath(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  return join(dirname(thisFile), 'faster_whisper_runner.py');
+}
+
+async function canRunPython(binary: string): Promise<boolean> {
   try {
-    await execFileAsync(binary, ['--help'], { timeout: 10_000 });
+    await execFileAsync(binary, ['--version'], { timeout: 10_000 });
     return true;
   } catch (err: unknown) {
     if (!(err instanceof Error)) return false;
     const msg = err.message.toLowerCase();
-    // Binary missing vs binary exists but --help returned non-zero
     if (msg.includes('enoent') || msg.includes('spawn')) return false;
+    // Binary exists but returned non-zero — still usable
     return true;
   }
 }
 
-async function assertWhisperWorks(binary: string): Promise<void> {
-  if (!(await canRun(binary))) {
-    throw new WhisperNotInstalledError(
-      `"${binary}" not found — ensure the whisper CLI is installed and on PATH.`
+async function assertFasterWhisperImportable(pythonBinary: string): Promise<void> {
+  try {
+    await execFileAsync(
+      pythonBinary,
+      ['-c', 'import faster_whisper'],
+      { timeout: 15_000 }
     );
-  }
-}
-
-/**
- * Scans well-known Python install directories for the whisper executable.
- *
- * On Windows, pip installs scripts into a `Scripts/` folder under the
- * Python installation root. This folder is often not on PATH, especially
- * for Microsoft Store or standalone Python installs.
- *
- * Checked locations:
- *   - %LOCALAPPDATA%\Python\pythoncore-{version}\Scripts\whisper.exe
- *   - %LOCALAPPDATA%\Programs\Python\Python{version}\Scripts\whisper.exe
- *   - %APPDATA%\Python\Python{version}\Scripts\whisper.exe
- */
-async function discoverFromPythonScripts(): Promise<string | undefined> {
-  if (platform !== 'win32') return undefined;
-
-  const candidates = await collectWindowsCandidates();
-
-  for (const candidate of candidates) {
-    if (await canExecute(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
-async function collectWindowsCandidates(): Promise<string[]> {
-  const localAppData = env['LOCALAPPDATA'];
-  const appData = env['APPDATA'];
-  const candidates: string[] = [];
-
-  // %LOCALAPPDATA%/Python/pythoncore-*/Scripts/whisper.exe
-  // This is where Microsoft Store / standalone Python installs live
-  if (localAppData !== undefined) {
-    const pythonDir = join(localAppData, 'Python');
-    const entries = await safeReaddir(pythonDir);
-
-    for (const entry of entries) {
-      if (entry.toLowerCase().startsWith('pythoncore-') || entry.toLowerCase().startsWith('python')) {
-        candidates.push(join(pythonDir, entry, 'Scripts', 'whisper.exe'));
-      }
-    }
-
-    // %LOCALAPPDATA%/Programs/Python/Python*/Scripts/whisper.exe
-    // Standard python.org installer location
-    const programsDir = join(localAppData, 'Programs', 'Python');
-    const programEntries = await safeReaddir(programsDir);
-
-    for (const entry of programEntries) {
-      if (entry.toLowerCase().startsWith('python')) {
-        candidates.push(join(programsDir, entry, 'Scripts', 'whisper.exe'));
-      }
-    }
-  }
-
-  // %APPDATA%/Python/Python*/Scripts/whisper.exe
-  // pip --user installs
-  if (appData !== undefined) {
-    const userPythonDir = join(appData, 'Python');
-    const entries = await safeReaddir(userPythonDir);
-
-    for (const entry of entries) {
-      if (entry.toLowerCase().startsWith('python')) {
-        candidates.push(join(userPythonDir, entry, 'Scripts', 'whisper.exe'));
-      }
-    }
-  }
-
-  return candidates;
-}
-
-async function canExecute(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath, constants.X_OK);
-    return true;
   } catch {
-    return false;
-  }
-}
-
-async function safeReaddir(dir: string): Promise<string[]> {
-  try {
-    return await readdir(dir);
-  } catch {
-    return [];
+    throw new WhisperNotInstalledError(
+      'faster-whisper not found — run: pip install faster-whisper'
+    );
   }
 }

@@ -35,7 +35,7 @@ export function registerAllTools(
   register(createListFilesTool(driveService));
   register(createListRecordingsTool(driveService));
   register(createReadFileTool(driveService));
-  register(createGetTranscriptTool(driveService));
+  // register(createGetTranscriptTool(driveService));
   register(createTranscribeRecordingTool(driveService));
   register(createUploadFileTool(driveService));
   register(createSearchFilesTool(driveService));

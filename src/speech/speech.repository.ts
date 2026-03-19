@@ -1,22 +1,21 @@
 import { execFile } from 'node:child_process';
-import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 
 import type { ISpeechRepository } from '../interfaces/speech-repository.interface.js';
 import type { ProgressCallback, TranscribeParams } from '../models/transcribe-params.model.js';
 import { TranscriptionFailedError } from '../errors/transcription-failed.error.js';
 import { Logger } from '../logger/index.js';
 
-// 30 minutes — protects against corrupt audio that hangs Whisper
+// 30 minutes — protects against corrupt audio that hangs the process
 const PROCESS_TIMEOUT_MS = 30 * 60_000;
 
-// Progress reporting interval while Whisper is running
+// Progress reporting interval while transcription is running
 const PROGRESS_INTERVAL_MS = 5_000;
 
-// Maps MIME types to file extensions so Whisper can identify the format.
-// Whisper auto-detects codec from the file, but needs a sensible extension.
+// Maps MIME types to file extensions so faster-whisper can identify the format.
 const MIME_TO_EXT: Record<string, string> = {
   'audio/wav': '.wav',
   'audio/x-wav': '.wav',
@@ -32,8 +31,8 @@ const MIME_TO_EXT: Record<string, string> = {
 
 /**
  * Extracts the base language code from a BCP-47 locale tag.
- * Whisper expects ISO 639-1 codes (e.g. "en"), not full locale tags
- * like "en-US" that the Google Speech API accepted.
+ * faster-whisper expects ISO 639-1 codes (e.g. "en"), not full locale tags
+ * like "en-US".
  */
 function toWhisperLanguage(languageCode: string): string {
   return languageCode.split('-')[0]!.toLowerCase();
@@ -43,10 +42,13 @@ function fileExtensionForMime(mimeType: string): string {
   return MIME_TO_EXT[mimeType] ?? '.audio';
 }
 
-export class WhisperRepository implements ISpeechRepository {
-  private readonly logger = new Logger('WhisperRepository');
+export class FasterWhisperRepository implements ISpeechRepository {
+  private readonly logger = new Logger('FasterWhisperRepository');
 
-  constructor(private readonly whisperPath: string) {}
+  constructor(
+    private readonly pythonPath: string,
+    private readonly runnerPath: string
+  ) {}
 
   async transcribe(params: TranscribeParams): Promise<string> {
     const ext = fileExtensionForMime(params.mimeType);
@@ -55,15 +57,12 @@ export class WhisperRepository implements ISpeechRepository {
 
     const sessionId = randomUUID();
     const inputPath = join(tmpdir(), `whisper-in-${sessionId}${ext}`);
-    const outputDir = join(tmpdir(), `whisper-out-${sessionId}`);
 
-    await mkdir(outputDir, { recursive: true });
     await writeFile(inputPath, params.audio);
 
     try {
-      const text = await this.runWhisper(
+      const text = await this.runFasterWhisper(
         inputPath,
-        outputDir,
         params.languageCode,
         params.onProgress
       );
@@ -75,61 +74,48 @@ export class WhisperRepository implements ISpeechRepository {
       return text.trim();
     } finally {
       await rm(inputPath, { force: true });
-      await rm(outputDir, { recursive: true, force: true });
     }
   }
 
-  private async runWhisper(
+  private async runFasterWhisper(
     inputPath: string,
-    outputDir: string,
     languageCode: string,
     onProgress?: ProgressCallback
   ): Promise<string> {
     const language = toWhisperLanguage(languageCode);
     const args = [
+      this.runnerPath,
+      'tiny',
+      'cpu',
+      language,
       inputPath,
-      '--language', language,
-      '--output_format', 'txt',
-      '--output_dir', outputDir,
-      '--model', 'tiny',
-      '--device','cpu'
     ];
 
-    this.logger.log(`Running: ${this.whisperPath} ${args.join(' ')}`);
+    this.logger.log(`Running: ${this.pythonPath} ${args.join(' ')}`);
 
-    const text = await this.execWithProgress(
-      this.whisperPath,
-      args,
-      onProgress
-    );
-
-    // If execWithProgress returns early (shouldn't happen), fall back to
-    // reading the output file.
-    if (text !== undefined) {
-      return text;
-    }
-
-    return this.readOutputFile(inputPath, outputDir);
+    return this.execWithProgress(this.pythonPath, args, onProgress);
   }
 
   /**
-   * Runs Whisper as a subprocess with time-based progress reporting.
+   * Runs faster-whisper via the Python runner script with time-based progress
+   * reporting.
    *
-   * Whisper CLI does not emit structured progress, so we report estimated
-   * milestones on a timer. This keeps the MCP client's timeout from
-   * expiring during long transcriptions.
+   * The runner prints the transcript to stdout. Progress is estimated on a
+   * timer since faster-whisper does not emit structured progress events.
+   * This keeps the MCP client's timeout from expiring during long
+   * transcriptions.
    */
   private execWithProgress(
     binary: string,
     args: string[],
     onProgress?: ProgressCallback
-  ): Promise<string | undefined> {
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = execFile(
         binary,
         args,
         { timeout: PROCESS_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024 },
-        (err, _stdout, stderr) => {
+        (err, stdout, stderr) => {
           clearInterval(progressTimer);
 
           if (err !== null) {
@@ -137,7 +123,7 @@ export class WhisperRepository implements ISpeechRepository {
 
             if (msg.includes('enoent') || msg.includes('spawn')) {
               reject(new TranscriptionFailedError(
-                'Whisper binary not found. Ensure openai-whisper is installed: pip install openai-whisper'
+                'Python binary not found. Ensure Python is installed and faster-whisper is available: pip install faster-whisper'
               ));
               return;
             }
@@ -150,13 +136,12 @@ export class WhisperRepository implements ISpeechRepository {
             }
 
             reject(new TranscriptionFailedError(
-              `Whisper process failed: ${stderr || err.message}`
+              `faster-whisper process failed: ${stderr || err.message}`
             ));
             return;
           }
 
-          // Process completed — the output file holds the transcript
-          resolve(undefined);
+          resolve(stdout);
         }
       );
 
@@ -174,22 +159,5 @@ export class WhisperRepository implements ISpeechRepository {
       // Ensure timer is cleaned up if the child process is killed externally
       child.on('close', () => clearInterval(progressTimer));
     });
-  }
-
-  private async readOutputFile(inputPath: string, outputDir: string): Promise<string> {
-    // Whisper names the output file after the input: input.mp3 → input.txt
-    const inputBase = basename(inputPath);
-    const dotIndex = inputBase.lastIndexOf('.');
-    const stem = dotIndex > 0 ? inputBase.slice(0, dotIndex) : inputBase;
-    const outputPath = join(outputDir, `${stem}.txt`);
-
-    try {
-      return await readFile(outputPath, 'utf-8');
-    } catch {
-      throw new TranscriptionFailedError(
-        'Whisper completed but no output file was produced. ' +
-        'The audio may contain no recognisable speech.'
-      );
-    }
   }
 }

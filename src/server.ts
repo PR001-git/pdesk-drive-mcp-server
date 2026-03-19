@@ -1,3 +1,4 @@
+import { exec } from 'node:child_process';
 import { createServer } from 'node:http';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -16,8 +17,8 @@ import { createNpmClient } from './npm/npm.client.js';
 import { NpmRepository } from './npm/npm.repository.js';
 import { DocsService } from './services/docs.service.js';
 import { DriveService } from './services/drive.service.js';
-import { WhisperRepository } from './speech/speech.repository.js';
-import { resolveWhisperPath } from './speech/whisper.resolver.js';
+import { FasterWhisperRepository } from './speech/speech.repository.js';
+import { resolvePythonPath } from './speech/whisper.resolver.js';
 import { registerAllTools } from './tools/registry/tool-registry.js';
 
 async function waitForOAuthCode(): Promise<string> {
@@ -43,12 +44,23 @@ async function waitForOAuthCode(): Promise<string> {
   });
 }
 
+function openBrowser(url: string): void {
+  const command =
+    process.platform === 'win32'
+      ? `start "" "${url}"`
+      : process.platform === 'darwin'
+        ? `open "${url}"`
+        : `xdg-open "${url}"`;
+  exec(command);
+}
+
 async function runOAuthFlow(tokenStore: TokenStore): Promise<void> {
   const client = createOAuth2Client();
   const authUrl = buildAuthUrl(client);
 
   // Use stderr so the MCP JSON-RPC channel on stdout is not polluted
-  process.stderr.write(`\nOpen this URL in your browser to authorize the application:\n${authUrl}\n\n`);
+  process.stderr.write(`\nOpening browser for Google authorization...\n${authUrl}\n\n`);
+  openBrowser(authUrl);
 
   const code = await waitForOAuthCode();
   const { tokens } = await client.getToken(code);
@@ -80,8 +92,8 @@ async function main(): Promise<void> {
 
   const driveClient = createDriveClient(oauth2Client);
   const repository = new DriveRepository(driveClient);
-  const whisperPath = await resolveWhisperPath();
-  const speechRepository = new WhisperRepository(whisperPath);
+  const { pythonPath, runnerPath } = await resolvePythonPath();
+  const speechRepository = new FasterWhisperRepository(pythonPath, runnerPath);
   const ffmpegPaths = await resolveFfmpegPaths();
   const audioPrep = new AudioPreparationService(ffmpegPaths);
   const driveService = new DriveService(repository, speechRepository, audioPrep);
